@@ -123,33 +123,6 @@ const MicIcon = ({ active }) => (
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
 );
 
-// --- Audio Helpers ---
-
-function decodeAudioData(data: Uint8Array, ctx: AudioContext, sampleRate: number, numChannels: number): Promise<AudioBuffer> {
-    return new Promise((resolve) => {
-        const dataInt16 = new Int16Array(data.buffer);
-        const frameCount = dataInt16.length / numChannels;
-        const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-        for (let channel = 0; channel < numChannels; channel++) {
-            const channelData = buffer.getChannelData(channel);
-            for (let i = 0; i < frameCount; i++) {
-                channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-            }
-        }
-        resolve(buffer);
-    });
-}
-
-function decodeBase64(base64: string) {
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
-}
-
 // --- Components ---
 
 const LogoSVG = () => (
@@ -234,11 +207,13 @@ const ImageGeneratingUI = () => {
     }, []);
 
     useEffect(() => {
-        const timer = setInterval(() => {
-            setTimeLeft(prev => prev > 0 ? prev - 1 : 0);
-        }, 1000);
-        return () => clearInterval(timer);
-    }, []);
+        if (timeLeft > 0) {
+            const timer = setInterval(() => {
+                setTimeLeft(prev => prev - 1);
+            }, 1000);
+            return () => clearInterval(timer);
+        }
+    }, [timeLeft]);
 
     return (
         <div className="relative w-72 h-36 bg-[#2f2f2f] rounded-xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-5 mx-auto">
@@ -320,7 +295,6 @@ const Terminal = () => {
     // Voice State
     const [isDictating, setIsDictating] = useState(false);
     const [dictationText, setDictationText] = useState('');
-    // FIX: Use ref to track transcript for onend callback
     const dictationRef = useRef('');
     
     // Config State
@@ -818,7 +792,7 @@ const Terminal = () => {
         } catch (err) {
             if (err.name === 'AbortError') return;
             
-            // Refined Error Parsing
+            // Refined Error Parsing to check specifically for FREE TIER QUOTA
             let isQuotaError = false;
             let isRateLimitError = false;
             
@@ -827,11 +801,11 @@ const Terminal = () => {
                 if (jsonMatch) {
                     const errorObj = JSON.parse(jsonMatch[0]);
                     if (errorObj.error) {
-                        const msg = errorObj.error.message || '';
+                        const msg = (errorObj.error.message || '').toLowerCase();
                         // Check for 429
                         if (errorObj.error.code === 429 || errorObj.error.status === 'RESOURCE_EXHAUSTED') {
-                            // Distinguish between Quota (daily) and Rate Limit (RPM)
-                            if (msg.toLowerCase().includes('quota')) {
+                            // Distinguish between Free Tier Quota vs General Rate Limit
+                            if (msg.includes('free tier') || msg.includes('quota')) {
                                 isQuotaError = true;
                             } else {
                                 isRateLimitError = true;
@@ -842,17 +816,15 @@ const Terminal = () => {
             } catch(e) {}
 
             if (isQuotaError) {
-                const errorContent = `**⚠️ System Overload (Daily Quota Exceeded)**\n\nYou have reached the daily generation limit. Please try again tomorrow or switch models.`;
+                const errorContent = `**⚠️ System Overload (Free Tier Quota Exceeded)**\n\nYou have reached the free tier generation limit. Please try again later or switch models.`;
                 setMessages(prev => [...prev, { id: uuidv4(), sender: 'system', content: errorContent, timestamp: Date.now() } as Message]);
             } else if (isRateLimitError) {
                 const errorContent = `**⚠️ System Busy (Rate Limit)**\n\nToo many requests in a short time. Please wait a moment and try again.`;
                  setMessages(prev => [...prev, { id: uuidv4(), sender: 'system', content: errorContent, timestamp: Date.now() } as Message]);
             } else {
-                // Log other failures silently or generic message if strictly needed, 
-                // but user asked to hide non-quota errors mostly.
-                console.warn("Generation failed:", err);
-                // Uncomment if you want generic errors shown:
-                // setMessages(prev => [...prev, { id: uuidv4(), sender: 'system', content: "Error: Generation failed.", timestamp: Date.now() } as Message]);
+                 // Specifically for image generation, log the model name to verify
+                 const errorMsg = `**Generation Failed**\n\nModel: ${imageModelId}\nError: ${err.message}`;
+                 setMessages(prev => [...prev, { id: uuidv4(), sender: 'system', content: errorMsg, timestamp: Date.now() } as Message]);
             }
         } finally {
             setIsLoading(false);
