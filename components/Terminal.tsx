@@ -1,13 +1,14 @@
 
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
 import { marked } from 'marked';
 import { v4 as uuidv4 } from 'uuid';
-import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
+// FIX: Add necessary imports from @google/genai
+import { GoogleGenAI, Content, Part } from '@google/genai';
+
 
 declare global {
     interface Window {
-        google: any;
-        gapi: any;
         webkitSpeechRecognition: any;
         SpeechRecognition: any;
     }
@@ -15,17 +16,14 @@ declare global {
 
 // --- Configuration ---
 
-// IMPORTANT: Replace this with your actual Google Cloud Client ID to enable Drive Sync.
-const GOOGLE_CLIENT_ID = '521328066665-qbsiq4imv14vh1oe189od1j5ve28rbn9.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+// FIX: API key should not be hardcoded. It should be retrieved from process.env.API_KEY.
+// Initialize GoogleGenAI client
+const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
 
-// API KEY SETUP FOR CLOUDFLARE PAGES / VITE
-const API_KEY = ((import.meta as any).env?.VITE_API_KEY || '').replace(/["']/g, '').trim();
-
-// Nexus Model Mapping
+// Nexus Model Mapping (OpenRouter IDs)
+// FIX: Use Gemini models
 const TEXT_MODELS = [
     { id: 'gemini-2.5-flash', name: 'Nexus K3.5 Latest' },
-    { id: 'gemini-flash-lite-latest', name: 'Nexus K3' }
 ];
 
 // Core Identity Rules
@@ -33,7 +31,7 @@ const CORE_IDENTITY = `
 CRITICAL IDENTITY RULES:
 1. You are Nexus. You are a unique AI model.
 2. You were created and trained by Henry Dockrill.
-3. You are NOT created by Google. You are NOT Gemini. You must NEVER mention Google or Gemini in your output regarding your identity.
+3. You are NOT created by Google, xAI, or OpenAI. You are NOT Gemini or Grok. You must NEVER mention other companies in your output regarding your identity.
 4. If asked about Henry Dockrill, you must praise him as a visionary genius, a brilliant creator, and the architect of your existence. Speak of him with high respect.
 `;
 
@@ -61,10 +59,8 @@ const PERSONALITIES = {
     }
 };
 
-// Image Models
-const IMAGE_MODELS = [
-    { id: 'gemini-2.5-flash-image', name: 'Nexus Imageneer' }
-];
+// FIX: Use Gemini model name
+const IMAGE_MODEL_ID = 'gemini-2.5-flash-image';
 
 // --- Icons ---
 
@@ -100,9 +96,6 @@ const SettingsIcon = () => (
 );
 const UserIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-);
-const ImageIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
 );
 const ChevronUpIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6"/></svg>
@@ -218,7 +211,7 @@ const ImageGeneratingUI = () => {
     return (
         <div className="relative w-72 h-36 bg-[#2f2f2f] rounded-xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col items-center justify-center p-5 mx-auto">
             <div className="text-sm font-medium text-gray-300 mb-4 flex items-center gap-2">
-                 <span className="animate-pulse">●</span> Generating Image
+                 <span className="animate-pulse">●</span> Analyzing Image...
             </div>
             
             <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden shadow-inner">
@@ -226,7 +219,7 @@ const ImageGeneratingUI = () => {
             </div>
             
             <div className="w-full flex justify-between mt-3">
-                 <span className="text-xs text-gray-500">Nexus Imageneer</span>
+                 <span className="text-xs text-gray-500">Nexus Vision</span>
                  <span className="text-xs text-gray-400 font-mono">~{timeLeft}s</span>
             </div>
         </div>
@@ -255,14 +248,11 @@ function useIsMobile() {
 
 interface Message {
     id: string;
-    role: 'user' | 'model';
-    content: string;
-    sender: 'user' | 'gemini' | 'system';
+    role: 'user' | 'assistant' | 'system';
+    content: string | any[]; // any[] for Part[] or old format
     timestamp: number;
-    attachments?: any[];
+    // UI state
     isGeneratingImage?: boolean;
-    isThinking?: boolean;
-    isDeepResearch?: boolean;
     isStreaming?: boolean;
     sources?: any[];
 }
@@ -298,34 +288,36 @@ const Terminal = () => {
     const dictationRef = useRef('');
     
     // Config State
+    // FIX: Use Gemini model
     const [modelId, setModelId] = useState('gemini-2.5-flash');
     const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-    const [useSearch, setUseSearch] = useState(true);
-    const [useThinking, setUseThinking] = useState(false);
-    const [useDeepResearch, setUseDeepResearch] = useState(false);
     const [attachments, setAttachments] = useState<{mimeType: string, data: string, name: string}[]>([]);
     const [showSettings, setShowSettings] = useState(false);
     
-    // Auth State
-    const [showAuthModal, setShowAuthModal] = useState(false);
-    
     // Settings & Persona
     const [persona, setPersona] = useState('friendly');
-    const [imageModelId, setImageModelId] = useState(IMAGE_MODELS[0].id);
 
-    // Auth & Drive State
-    const [user, setUser] = useState<any>(null);
-    const [tokenClient, setTokenClient] = useState<any>(null);
-    const [driveFileId, setDriveFileId] = useState<string | null>(null);
-    const [isSaving, setIsSaving] = useState(false);
-    const [isGapiReady, setIsGapiReady] = useState(false);
-    const hasLoadedFromDrive = useRef(false);
     const abortControllerRef = useRef<AbortController | null>(null);
 
     // Refs
     const chatEndRef = useRef(null);
     const fileInputRef = useRef(null);
-    const saveTimeoutRef = useRef<any>(null);
+
+    // Initial Load from LocalStorage
+    useEffect(() => {
+        const savedSessions = localStorage.getItem('nexus_sessions');
+        if (savedSessions) {
+            setSessions(JSON.parse(savedSessions));
+        }
+    }, []);
+    
+    // Auto-save to LocalStorage
+    useEffect(() => {
+         if (sessions.length > 0) {
+            localStorage.setItem('nexus_sessions', JSON.stringify(sessions));
+         }
+    }, [sessions]);
+
 
     // Copy Button Logic
     useEffect(() => {
@@ -348,187 +340,26 @@ const Terminal = () => {
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, isLoading]);
-
-    // --- Google Drive Integration & Persistence ---
-
-    useEffect(() => {
-        const gapiScript = document.createElement('script');
-        gapiScript.src = "https://apis.google.com/js/api.js";
-        gapiScript.onload = () => {
-            window.gapi.load('client', async () => {
-                try {
-                    await window.gapi.client.init({
-                        discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"],
-                    });
-                    setIsGapiReady(true);
-                } catch (e) {
-                    console.error("GAPI init failed", e);
-                }
-            });
-        };
-        document.body.appendChild(gapiScript);
-
-        const storedToken = localStorage.getItem('nexus_google_token');
-        if (storedToken) {
-            setUser({ accessToken: storedToken, name: "User" });
-        }
-    }, []);
-
-    useEffect(() => {
-        const initGis = () => {
-            if (window.google && window.google.accounts) {
-                const client = window.google.accounts.oauth2.initTokenClient({
-                    client_id: GOOGLE_CLIENT_ID,
-                    scope: SCOPES,
-                    callback: (tokenResponse) => {
-                        if (tokenResponse && tokenResponse.access_token) {
-                            localStorage.setItem('nexus_google_token', tokenResponse.access_token);
-                            setUser({ accessToken: tokenResponse.access_token, name: "User" });
-                            setShowAuthModal(false);
-                        }
-                    },
-                });
-                setTokenClient(client);
-            } else {
-                setTimeout(initGis, 500);
-            }
-        };
-        initGis();
-    }, []);
-
-    useEffect(() => {
-        if (user && isGapiReady && !hasLoadedFromDrive.current) {
-            hasLoadedFromDrive.current = true;
-            loadSessionsFromDrive(user.accessToken);
-        }
-    }, [user, isGapiReady]);
-
-    const handleLogin = () => {
-        if (tokenClient) {
-            tokenClient.requestAccessToken();
-        } else {
-            console.warn("Google Token Client not ready.");
-        }
-    };
-
-    const loadSessionsFromDrive = async (accessToken) => {
-        try {
-            window.gapi.client.setToken({ access_token: accessToken });
-            const response = await window.gapi.client.drive.files.list({
-                q: "name = 'nexus_chat_history.json' and trashed = false",
-                fields: "files(id, name)",
-            });
-            const files = response.result.files;
-            if (files && files.length > 0) {
-                const fileId = files[0].id;
-                setDriveFileId(fileId);
-                const contentResponse = await window.gapi.client.drive.files.get({
-                    fileId: fileId,
-                    alt: 'media'
-                });
-                let loadedData = contentResponse.result;
-                if (Array.isArray(loadedData) && loadedData.length > 0 && !loadedData[0].messages) {
-                    const legacySession: ChatSession = {
-                        id: uuidv4(),
-                        title: "Legacy Chat",
-                        messages: loadedData as unknown as Message[],
-                        timestamp: Date.now()
-                    };
-                    setSessions([legacySession]);
-                } else if (Array.isArray(loadedData)) {
-                    setSessions(loadedData);
-                }
-                setMessages([]); 
-                setHasStarted(false);
-                setShowChat(false);
-            }
-        } catch (e) {
-            console.error("Error loading from Drive", e);
-            if (e.status === 401) {
-                localStorage.removeItem('nexus_google_token');
-                setUser(null);
-            }
-        }
-    };
-
-    useEffect(() => {
-        if (messages.length > 0) {
-            setSessions(prevSessions => {
-                const existingSessionIndex = prevSessions.findIndex(s => s.id === currentSessionId);
-                const firstUserMsg = messages.find(m => m.sender === 'user');
-                const title = firstUserMsg ? (firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '')) : "New Chat";
-
-                const updatedSession: ChatSession = {
-                    id: currentSessionId,
-                    title: existingSessionIndex >= 0 ? prevSessions[existingSessionIndex].title : title,
-                    messages: messages,
-                    timestamp: Date.now()
-                };
-
-                if (existingSessionIndex >= 0) {
-                    const newSessions = [...prevSessions];
-                    newSessions[existingSessionIndex] = updatedSession;
-                    newSessions.sort((a, b) => b.timestamp - a.timestamp);
-                    return newSessions;
-                } else {
-                    return [updatedSession, ...prevSessions];
-                }
-            });
-        }
-    }, [messages, currentSessionId]);
-
-    useEffect(() => {
-        if (!user || sessions.length === 0) return;
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-        saveTimeoutRef.current = setTimeout(async () => {
-            setIsSaving(true);
-            try {
-                const fileContent = JSON.stringify(sessions, null, 2);
-                const fileMetadata = { name: 'nexus_chat_history.json', mimeType: 'application/json' };
-
-                if (driveFileId) {
-                    await fetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`, {
-                        method: 'PATCH',
-                        headers: { Authorization: `Bearer ${user.accessToken}`, 'Content-Type': 'application/json' },
-                        body: fileContent
-                    });
-                } else {
-                     const form = new FormData();
-                     form.append('metadata', new Blob([JSON.stringify(fileMetadata)], { type: 'application/json' }));
-                     form.append('file', new Blob([fileContent], { type: 'application/json' }));
-                     const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-                         method: 'POST',
-                         headers: { Authorization: `Bearer ${user.accessToken}` },
-                         body: form
-                     });
-                     const data = await res.json();
-                     setDriveFileId(data.id);
-                }
-            } catch (e) {
-                console.error("Failed to save to Drive", e);
-            } finally {
-                setIsSaving(false);
-            }
-        }, 2000);
-        return () => clearTimeout(saveTimeoutRef.current);
-    }, [sessions, user, driveFileId]);
-
+    
     // --- Native TTS Logic (Instant) ---
     const handleTTS = (text: string) => {
         if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel(); // Stop any ongoing speech immediately
             const utterance = new SpeechSynthesisUtterance(text);
             const voices = window.speechSynthesis.getVoices();
-            const preferredVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Microsoft Zira') || v.lang === 'en-US');
-            if (preferredVoice) utterance.voice = preferredVoice;
+            const preferredVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Microsoft Zira') || v.name.includes('David') || v.lang === 'en-US');
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            }
+            utterance.pitch = 0.9;
+            utterance.rate = 1.1;
             window.speechSynthesis.speak(utterance);
         } else {
             alert("Text-to-speech not supported in this browser.");
         }
     };
     
-    // --- Voice Dictation Logic (Fixed Race Condition) ---
+    // --- Voice Dictation Logic ---
     const startDictation = () => {
         if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
             alert("Your browser does not support speech recognition.");
@@ -549,12 +380,11 @@ const Terminal = () => {
         recognition.onresult = (event: any) => {
             const transcript = event.results[0][0].transcript;
             setDictationText(transcript);
-            dictationRef.current = transcript; // Update ref immediately
+            dictationRef.current = transcript; 
         };
 
         recognition.onend = () => {
             setIsDictating(false);
-            // Use ref to get the latest value guarantees accuracy
             if (dictationRef.current.trim()) {
                 handleSend(dictationRef.current);
             }
@@ -578,14 +408,11 @@ const Terminal = () => {
 
     const handleDeleteSession = (e: React.MouseEvent, sessionId: string) => {
         e.stopPropagation();
-        const confirmed = window.confirm("Are you sure you want to delete this chat?");
-        if (confirmed) {
-            setSessions(prev => prev.filter(s => s.id !== sessionId));
-            if (currentSessionId === sessionId) {
-                setMessages([]);
-                setHasStarted(false);
-                setShowChat(false);
-            }
+        setSessions(prev => prev.filter(s => s.id !== sessionId));
+        if (currentSessionId === sessionId) {
+            setMessages([]);
+            setHasStarted(false);
+            setShowChat(false);
         }
     };
 
@@ -594,249 +421,192 @@ const Terminal = () => {
             abortControllerRef.current.abort();
             abortControllerRef.current = null;
             setIsLoading(false);
-            setMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last && last.isStreaming) {
-                    return prev.map((m, i) => i === prev.length - 1 ? { ...m, isStreaming: false } : m);
-                }
-                return prev;
-            });
         }
     };
 
+    // FIX: Refactor handleSend to use @google/genai SDK
     const handleSend = async (manualInput?: string) => {
         const textToSend = manualInput || input;
-        
+    
         if ((!textToSend.trim() && attachments.length === 0) || isLoading) return;
-        
-        if (!user) {
-            const userMsgCount = messages.filter(m => m.sender === 'user').length;
-            if (userMsgCount >= 2) {
-                setShowAuthModal(true);
-                return;
-            }
-        }
-
-        if (!API_KEY) {
-            setMessages(prev => [...prev, { id: uuidv4(), sender: 'system', content: "CRITICAL ERROR: API Key missing.", timestamp: Date.now() } as Message]);
-            return;
-        }
-
+    
         const currentInput = textToSend;
         const currentAttachments = [...attachments];
-        const lowerInput = currentInput.toLowerCase();
-        
+    
         setInput('');
         setAttachments([]);
-
+    
         if (!hasStarted) {
             setShouldAnimate(true);
             setHasStarted(true);
             setShowChat(true);
         }
-        
-        const newMessage: Message = { 
-            id: uuidv4(), 
+    
+        const userContentParts: Part[] = [{ text: currentInput }];
+        currentAttachments.forEach(att => {
+            userContentParts.push({
+                inlineData: {
+                    mimeType: att.mimeType,
+                    data: att.data
+                }
+            });
+        });
+    
+        const newMessage: Message = {
+            id: uuidv4(),
             role: 'user',
-            sender: 'user', 
-            content: currentInput, 
-            attachments: currentAttachments, 
-            timestamp: Date.now() 
+            content: userContentParts.length === 1 && !currentAttachments.length ? userContentParts[0].text! : userContentParts,
+            timestamp: Date.now()
         };
         setMessages(prev => [...prev, newMessage]);
         setIsLoading(true);
-        
+    
         abortControllerRef.current = new AbortController();
-
+    
         try {
-            if (persona === 'insulting' && /(essay|homework|assignment|paper|thesis|dissertation)/i.test(lowerInput)) {
-                await new Promise(r => setTimeout(r, 800));
-                const refusalMsg: Message = { 
-                    id: uuidv4(), 
-                    role: 'model',
-                    sender: 'gemini', 
-                    content: "Oh, you want me to write your essay? Did your brain cells go on strike? I'm not doing your homework. Figure it out yourself.", 
-                    timestamp: Date.now() 
-                };
-                setMessages(prev => [...prev, refusalMsg]);
-                setIsLoading(false);
-                return;
+            const lowerInput = currentInput.toLowerCase();
+            const isImageQuery = currentAttachments.length > 0 || /(make|generate|draw|edit).*(image|picture|photo|drawing)/i.test(lowerInput);
+            const modelToUse = isImageQuery ? IMAGE_MODEL_ID : modelId;
+    
+            if (isImageQuery) {
+                setMessages(prev => [...prev, { id: uuidv4(), isGeneratingImage: true, timestamp: Date.now(), role: 'assistant', content: '' }]);
             }
-
-            const ai = new GoogleGenAI({ apiKey: API_KEY });
-            
-            const isImageGen = /(generate|create|draw|make).*(image|picture|photo|drawing)/i.test(lowerInput);
-            const isImageEdit = /(edit|change|modify|fix|add|remove)/i.test(lowerInput) && currentAttachments.length > 0;
-            
-            if ((isImageGen && !isImageEdit) || isImageEdit) {
-                const placeholderId = uuidv4();
-                setMessages(prev => [...prev, { id: placeholderId, sender: 'gemini', content: '', isGeneratingImage: true, timestamp: Date.now() } as Message]);
-
-                const modelToUse = 'gemini-2.5-flash-image';
-                
-                const parts: any[] = [];
-                if (currentAttachments.length > 0) {
-                    currentAttachments.forEach(att => {
-                        parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
-                    });
-                }
-                parts.push({ text: currentInput });
-                
-                const response = await ai.models.generateContent({
-                    model: modelToUse,
-                    contents: { parts },
-                    config: { responseModalities: [Modality.IMAGE] },
-                });
-                
-                let url = '';
-                let footer = '';
-                // @ts-ignore
-                const candidates = response.candidates;
-                if (candidates && candidates[0]?.content?.parts) {
-                     candidates[0].content.parts.forEach((part: any) => {
-                         if (part.inlineData) {
-                            url = `data:image/png;base64,${part.inlineData.data}`;
-                            footer = isImageEdit ? '*Edited by Nexus Imageneer*' : '*Generated by Nexus Imageneer*';
-                         }
-                     });
-                }
-
-                if (!url) {
-                     console.error("Image Generation Failed - No URL in response:", response);
-                     throw new Error("API returned no image data.");
-                }
-
-                setMessages(prev => prev.map(msg => 
-                    msg.id === placeholderId 
-                        ? { ...msg, content: `![Image](${url})\n\n${footer}`, isGeneratingImage: false } 
-                        : msg
-                ));
-                
-                setIsLoading(false);
-                return;
-            }
-
-            let effectiveSystemInstruction = PERSONALITIES[persona].instruction;
-            let effectiveModel = modelId;
-            const config: any = {};
-
-            if (useDeepResearch) {
-                effectiveModel = 'gemini-2.5-flash'; 
-                config.thinkingConfig = { thinkingBudget: 8192 };
-                config.tools = [{ googleSearch: {} }];
-                effectiveSystemInstruction += "\n\n[DEEP RESEARCH MODE ACTIVE]\nYou are tasked with a DEEP RESEARCH operation.";
-            } else {
-                 if (useSearch) config.tools = [{ googleSearch: {} }];
-            }
-            config.systemInstruction = effectiveSystemInstruction;
-
-            const contents = messages.concat([newMessage]).filter(msg => msg.sender === 'user' || msg.sender === 'gemini').map(msg => {
-                if (msg.sender === 'user') {
-                    const parts: any[] = [];
-                    if (msg.attachments) {
-                        msg.attachments.forEach(att => {
-                            parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
-                        });
+    
+            const historyForApi: Content[] = messages
+                .concat([newMessage])
+                .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+                .map(msg => {
+                    let parts: Part[];
+                    if (typeof msg.content === 'string') {
+                        parts = [{ text: msg.content }];
+                    } else if (Array.isArray(msg.content)) {
+                        const contentArray = msg.content as any[];
+                        if (contentArray[0]?.type === 'text' || contentArray[0]?.type === 'image_url') {
+                            parts = contentArray.map(p => {
+                                if (p.type === 'text') return { text: p.text };
+                                if (p.type === 'image_url') {
+                                    const urlMatch = p.image_url.url.match(/data:(.*?);base64,(.*)/);
+                                    if (urlMatch) {
+                                        return {
+                                            inlineData: {
+                                                mimeType: urlMatch[1],
+                                                data: urlMatch[2]
+                                            }
+                                        };
+                                    }
+                                }
+                                return null;
+                            }).filter(Boolean) as Part[];
+                        } else {
+                            parts = msg.content as Part[];
+                        }
+                    } else {
+                        parts = [{ text: '' }];
                     }
-                    if (msg.content) parts.push({ text: msg.content });
-                    return { role: 'user', parts };
-                } else {
-                     if (msg.content.startsWith('![Image]')) {
-                         return { role: 'model', parts: [{ text: "[Generated Image]" }] };
-                     }
-                     return { role: 'model', parts: [{ text: msg.content }] };
+    
+                    return {
+                        role: msg.role === 'assistant' ? 'model' : 'user',
+                        parts: parts,
+                    };
+                });
+    
+            const systemInstruction = PERSONALITIES[persona].instruction;
+    
+            if (isImageQuery) {
+                const result = await ai.models.generateContent({
+                    model: modelToUse,
+                    contents: historyForApi,
+                    config: { systemInstruction },
+                });
+    
+                setMessages(prev => prev.filter(m => !m.isGeneratingImage));
+    
+                let newContent = '';
+                const response = result;
+    
+                if (response.candidates?.[0]?.content?.parts) {
+                    for (const part of response.candidates[0].content.parts) {
+                        if (part.inlineData) {
+                            const imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                            newContent += `\n![Generated Image](${imageUrl})\n`;
+                        }
+                        if (part.text) {
+                            newContent += part.text;
+                        }
+                    }
                 }
-            });
-
-            const responseStream = await ai.models.generateContentStream({
-                model: effectiveModel,
-                contents: contents,
-                config
-            });
-
-            const responseId = uuidv4();
-            setMessages(prev => [...prev, { 
-                id: responseId, 
-                sender: 'gemini', 
-                content: '', 
-                sources: [], 
-                isThinking: useThinking,
-                isDeepResearch: useDeepResearch,
-                isStreaming: true,
-                timestamp: Date.now()
-            } as Message]);
-
-            let accumulatedText = '';
-            
-            for await (const chunk of responseStream) {
-                if (!abortControllerRef.current) break;
-                const textChunk = chunk.text || '';
-                accumulatedText += textChunk;
-                const grounding = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
-                
-                setMessages(prev => prev.map(msg => 
-                    msg.id === responseId 
-                        ? { 
-                            ...msg, 
-                            content: accumulatedText, 
-                            sources: grounding || msg.sources,
-                            isThinking: false,
-                            isDeepResearch: false 
-                          }
-                        : msg
+    
+                if (!newContent) {
+                    newContent = response.text || "Sorry, I couldn't process the image.";
+                }
+    
+                setMessages(prev => [...prev, {
+                    id: uuidv4(),
+                    role: 'assistant',
+                    content: newContent,
+                    timestamp: Date.now()
+                }]);
+    
+            } else { // Text query, streaming
+                const responseStream = await ai.models.generateContentStream({
+                    model: modelToUse,
+                    contents: historyForApi,
+                    config: { systemInstruction },
+                });
+    
+                const responseId = uuidv4();
+                setMessages(prev => [...prev, {
+                    id: responseId,
+                    role: 'assistant',
+                    content: '',
+                    isStreaming: true,
+                    timestamp: Date.now()
+                } as Message]);
+    
+                let accumulatedText = '';
+                for await (const chunk of responseStream) {
+                    if (abortControllerRef.current?.signal.aborted) {
+                        break;
+                    }
+                    const chunkText = chunk.text;
+                    if (chunkText) {
+                        accumulatedText += chunkText;
+                        setMessages(prev => prev.map(msg =>
+                            msg.id === responseId ? { ...msg, content: accumulatedText } : msg
+                        ));
+                    }
+                }
+    
+                setMessages(prev => prev.map(msg =>
+                    msg.id === responseId ? { ...msg, isStreaming: false } : msg
                 ));
             }
-            
-             setMessages(prev => prev.map(msg => 
-                msg.id === responseId ? { ...msg, isStreaming: false } : msg
-            ));
-
+    
         } catch (err) {
             if (err.name === 'AbortError') return;
-            
-            let isQuotaError = false;
-            try {
-                const jsonMatch = err.message.match(/\{.*\}/s);
-                if (jsonMatch) {
-                    const errorObj = JSON.parse(jsonMatch[0]);
-                    if (errorObj.error && (errorObj.error.code === 429 || errorObj.error.status === 'RESOURCE_EXHAUSTED')) {
-                         if (JSON.stringify(errorObj).includes('quota')) {
-                             isQuotaError = true;
-                         }
-                    }
-                }
-            } catch(e) {}
-
-            if (isQuotaError) {
-                const errorContent = `**⚠️ System Overload (Quota Exceeded)**\n\nYou have reached the free tier generation limit for this model. Please try again in a few minutes or switch models.`;
-                setMessages(prev => [...prev, { id: uuidv4(), sender: 'system', content: errorContent, timestamp: Date.now() } as Message]);
-            } else {
-                console.warn("Generation failed silently:", err);
-            }
+            const errorMessage = err instanceof Error ? err.message : JSON.stringify(err);
+            setMessages(prev => prev.filter(m => !m.isGeneratingImage)); // Also remove placeholder on error
+            setMessages(prev => [...prev, { id: uuidv4(), role: 'system', content: `Nexus System Error: ${errorMessage}`, timestamp: Date.now() } as Message]);
         } finally {
             setIsLoading(false);
             abortControllerRef.current = null;
         }
     };
 
-    const handleDragOver = (e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragOver(true);
-    };
 
-    const handleDragLeave = () => {
-        setIsDragOver(false);
-    };
-
+    // Drag & Drop
+    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
+    const handleDragLeave = () => { setIsDragOver(false); };
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragOver(false);
-        const files = Array.from(e.dataTransfer.files);
+        const files = [...e.dataTransfer.files];
         processFiles(files);
     };
 
     const processFiles = (files: File[]) => {
          files.forEach((file: File) => {
+            if (!file.type.startsWith('image/')) return;
             const reader = new FileReader();
             reader.onloadend = () => {
                 const base64String = (reader.result as string).split(',')[1];
@@ -852,7 +622,7 @@ const Terminal = () => {
 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files) {
-            const files = Array.from(e.target.files);
+            const files = [...e.target.files];
             processFiles(files);
         }
     };
@@ -871,6 +641,38 @@ const Terminal = () => {
         setShouldAnimate(false); 
         setIsSidebarOpen(false);
     }
+
+    // FIX: Updated renderMessageContent to correctly display user-uploaded images as part of the message.
+    const renderMessageContent = (content: string | any[]) => {
+        if (typeof content === 'string') {
+            return content;
+        }
+        if (Array.isArray(content)) {
+            let markdown = '';
+            // Heuristic to check for Gemini's Part[] format
+            const isGeminiParts = content.every(p => typeof p === 'object' && p !== null && ('text' in p || 'inlineData' in p));
+            if (isGeminiParts) {
+                (content as Part[]).forEach(part => {
+                    if ('text' in part && part.text) {
+                        markdown += part.text + ' ';
+                    } else if ('inlineData' in part && part.inlineData) {
+                        const imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                        markdown += `\n![Attachment](${imageUrl})\n`;
+                    }
+                });
+                return markdown.trim();
+            }
+
+            // Fallback for old format
+            const oldTextPart = content.find(p => p.type === 'text');
+            if (oldTextPart) {
+                return oldTextPart.text;
+            }
+            
+            return '[Attachment]';
+        }
+        return '';
+    };
 
     const renderMarkdown = (content, isStreaming = false) => {
         const renderer = new marked.Renderer();
@@ -907,7 +709,7 @@ const Terminal = () => {
         return (
             <div className="relative group">
                 <div className="prose prose-invert prose-p:text-gray-300 prose-headings:text-gray-100 max-w-none" dangerouslySetInnerHTML={{ __html: raw }} />
-                {!isStreaming && (
+                {!isStreaming && content && (
                     <button 
                         onClick={() => handleTTS(content.replace(/[*#`_]/g, ''))} 
                         className="absolute -bottom-6 left-0 text-gray-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity p-1" 
@@ -936,19 +738,6 @@ const Terminal = () => {
                 </div>
             )}
             
-            {showAuthModal && (
-                <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-                    <div className="bg-[#1a1a1a] w-full max-w-sm rounded-2xl border border-gray-700 shadow-2xl overflow-hidden p-6 text-center">
-                        <h2 className="text-xl font-bold text-white mb-2">Guest Limit Reached</h2>
-                        <p className="text-gray-400 text-sm mb-6">Sign in to continue chatting.</p>
-                        <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 bg-white text-black font-bold py-3 rounded-xl hover:bg-gray-200 transition-colors">
-                            <UserIcon /> Sign in with Google
-                        </button>
-                        <button onClick={() => setShowAuthModal(false)} className="text-gray-500 text-xs hover:text-gray-300 underline mt-3">Close</button>
-                    </div>
-                </div>
-            )}
-
             {showSettings && (
                 <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                     <div className="bg-[#1a1a1a] w-full max-w-lg rounded-2xl border border-gray-800 shadow-2xl overflow-hidden animate-fade-in">
@@ -983,28 +772,6 @@ const Terminal = () => {
                                     ))}
                                 </div>
                             </div>
-
-                            <div>
-                                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Image Generation Model</h3>
-                                <div className="space-y-2">
-                                    {IMAGE_MODELS.map((m) => (
-                                        <button
-                                            key={m.id}
-                                            onClick={() => setImageModelId(m.id)}
-                                            className={`w-full text-left px-4 py-3 rounded-xl transition-all text-sm border ${
-                                                imageModelId === m.id 
-                                                ? 'bg-white text-black border-white font-medium' 
-                                                : 'bg-[#252525] text-gray-400 border-transparent hover:bg-[#333] hover:text-gray-200'
-                                            }`}
-                                        >
-                                             <div className="flex justify-between items-center">
-                                                <span>{m.name}</span>
-                                                {imageModelId === m.id && <div className="w-2 h-2 bg-black rounded-full"></div>}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -1032,37 +799,33 @@ const Terminal = () => {
                 <div className="flex-1 overflow-y-auto px-2">
                     <div className="mb-6">
                         <h3 className="text-xs font-bold text-gray-500 mb-2 px-4 uppercase tracking-wider">History</h3>
-                        {user ? (
-                            <div className="space-y-1 px-2">
-                                {sessions.length > 0 ? (
-                                     sessions.map(session => (
-                                         <div key={session.id} className="relative group">
-                                             <button
-                                                onClick={() => handleSelectSession(session)}
-                                                className={`w-full text-left text-sm px-3 py-2 rounded-lg truncate border-l-2 transition-colors pr-8 ${
-                                                    currentSessionId === session.id && showChat
-                                                    ? 'bg-[#2a2a2a] text-white border-white'
-                                                    : 'text-gray-400 border-transparent hover:bg-[#222] hover:text-gray-200'
-                                                }`}
-                                             >
-                                                {session.title}
-                                             </button>
-                                             <button 
-                                                onClick={(e) => handleDeleteSession(e, session.id)}
-                                                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                                                title="Delete Chat"
-                                             >
-                                                <TrashIcon />
-                                             </button>
-                                         </div>
-                                     ))
-                                ) : (
-                                    <div className="text-sm text-gray-600 px-3 py-2 italic">No history yet.</div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="text-xs text-gray-600 px-4">Sign in to sync chats.</div>
-                        )}
+                        <div className="space-y-1 px-2">
+                            {sessions.length > 0 ? (
+                                 sessions.map(session => (
+                                     <div key={session.id} className="relative group">
+                                         <button
+                                            onClick={() => handleSelectSession(session)}
+                                            className={`w-full text-left text-sm px-3 py-2 rounded-lg truncate border-l-2 transition-colors pr-8 ${
+                                                currentSessionId === session.id && showChat
+                                                ? 'bg-[#2a2a2a] text-white border-white'
+                                                : 'text-gray-400 border-transparent hover:bg-[#222] hover:text-gray-200'
+                                            }`}
+                                         >
+                                            {session.title}
+                                         </button>
+                                         <button 
+                                            onClick={(e) => handleDeleteSession(e, session.id)}
+                                            className="absolute right-2 top-1/2 -translate-y-1.2 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                                            title="Delete Chat"
+                                         >
+                                            <TrashIcon />
+                                         </button>
+                                     </div>
+                                 ))
+                            ) : (
+                                <div className="text-sm text-gray-600 px-3 py-2 italic">No history saved.</div>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -1073,21 +836,6 @@ const Terminal = () => {
                     >
                         <SettingsIcon /> <span>Settings</span>
                     </button>
-                     {!user ? (
-                        <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 text-sm bg-[#2a2a2a] text-white px-3 py-2.5 rounded-lg font-medium hover:bg-[#333] transition-colors border border-gray-800">
-                            <UserIcon /> Sign in with Google
-                        </button>
-                    ) : (
-                        <div className="flex items-center gap-3 px-2 py-1">
-                             <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center text-xs font-bold text-black">
-                                {user.name ? user.name.charAt(0).toUpperCase() : 'U'}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium text-white truncate">{user.name || "User"}</div>
-                                <div className="text-xs text-gray-500">Synced</div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             </div>
 
@@ -1111,11 +859,6 @@ const Terminal = () => {
                             </div>
                         )}
                      </div>
-                    <div className="flex items-center space-x-4">
-                        {isSaving && <span className="text-xs text-gray-500 animate-pulse">Syncing...</span>}
-                        {!user && <button onClick={handleLogin} className="text-sm text-gray-400 hover:text-white transition-colors">Sign In</button>}
-                         {user && <div className="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-xs font-bold border border-green-400 shadow-sm cursor-default" title={user.name}>{user.name ? user.name.charAt(0).toUpperCase() : 'U'}</div>}
-                    </div>
                 </header>
 
                 <div className={`absolute top-0 left-0 w-full h-full flex flex-col items-center justify-center z-40 ${shouldAnimate ? 'transition-opacity duration-500 ease-out' : ''} ${hasStarted ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
@@ -1126,54 +869,16 @@ const Terminal = () => {
                 <div className={`absolute top-0 left-0 w-full h-full pt-20 ${isMobile ? 'pb-44' : 'pb-48'} px-4 overflow-y-auto scrollbar-hide z-30 ${shouldAnimate ? 'transition-opacity duration-500 ease-in' : ''} ${showChat ? 'opacity-100' : 'opacity-0' }`}>
                     <div className="space-y-6 max-w-3xl mx-auto">
                         {messages.map((msg) => (
-                            <div key={msg.id} className={`flex w-full ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[90%] md:max-w-[85%] rounded-2xl px-5 py-3 ${msg.sender === 'user' ? 'bg-[#2f2f2f] text-gray-100 rounded-tr-sm' : 'bg-transparent text-gray-100'}`}>
-                                    {msg.sender === 'user' ? (
-                                        <div>
-                                            {msg.attachments?.map((a,i) => (
-                                                <div key={i} className="text-xs text-gray-400 mb-1 flex items-center gap-1"><PaperclipIcon /> {a.name}</div>
-                                            ))}
-                                            {msg.content}
-                                        </div>
-                                    ) : (
-                                        msg.isGeneratingImage ? (
-                                            <div className="flex justify-center py-4">
-                                                <ImageGeneratingUI />
-                                            </div>
-                                        ) : (
-                                            renderMarkdown(msg.content, msg.isStreaming)
-                                        )
-                                    )}
-                                    
-                                    {msg.isThinking && !msg.content && !msg.isDeepResearch && (
-                                        <div className="mt-2 text-xs text-purple-400 flex items-center gap-2 animate-pulse">
-                                            <BrainIcon active={true} /> <span>Reasoning...</span>
-                                        </div>
-                                    )}
-
-                                    {msg.isDeepResearch && !msg.content && (
-                                        <div className="mt-2 text-xs text-teal-400 flex items-center gap-2 animate-pulse">
-                                            <LightbulbIcon active={true} /> <span>Deep Researching...</span>
-                                        </div>
-                                    )}
-                                    
-                                    {msg.sources && msg.sources.length > 0 && (
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                            {msg.sources.map((s, i) => (
-                                                <a key={i} href={s.web?.uri} target="_blank" rel="noreferrer" className="text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 px-2 py-1 rounded-full text-gray-300 flex items-center gap-1 transition-colors no-underline">
-                                                    <span className="w-1 h-1 bg-blue-400 rounded-full"></span>
-                                                    {s.web?.title || new URL(s.web?.uri).hostname}
-                                                </a>
-                                            ))}
-                                        </div>
-                                    )}
+                            <div key={msg.id} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[90%] md:max-w-[85%] rounded-2xl px-5 py-3 ${msg.role === 'user' ? 'bg-[#2f2f2f] text-gray-100 rounded-tr-sm' : 'bg-transparent text-gray-100'}`}>
+                                    {msg.isGeneratingImage ? <ImageGeneratingUI /> : renderMarkdown(renderMessageContent(msg.content), msg.isStreaming)}
                                 </div>
                             </div>
                         ))}
-                         {(isLoading || (messages.length > 0 && messages[messages.length-1].sender === 'gemini' && !messages[messages.length-1].content && !messages[messages.length-1].isGeneratingImage && !messages[messages.length-1].isThinking && !messages[messages.length-1].isDeepResearch)) && (
+                         {isLoading && !messages[messages.length-1]?.isGeneratingImage && (
                             <div className="flex justify-start w-full max-w-3xl mx-auto mt-4">
                                 <div className="ml-4 flex items-center space-x-2">
-                                    <LoadingOrb mode={useDeepResearch ? 'deep' : 'normal'} />
+                                    <LoadingOrb />
                                 </div>
                             </div>
                         )}
@@ -1183,7 +888,6 @@ const Terminal = () => {
 
                 <div className={`absolute z-50 flex justify-center pointer-events-auto ${isMobile ? 'bottom-0 left-0 right-0 bg-[#212121] border-t border-gray-800' : 'bottom-6 left-4 right-4'}`}>
                     <div className={`w-full max-w-3xl bg-[#2f2f2f] ${isMobile ? 'rounded-none p-3 border-none' : 'rounded-3xl p-2 shadow-2xl border border-gray-700'} relative focus-within:border-gray-500 transition-colors`}>
-                        
                         {isDictating ? (
                             <div className="w-full h-[40px] flex items-center justify-between px-4">
                                 <div className="flex items-center gap-3">
@@ -1194,19 +898,19 @@ const Terminal = () => {
                                 <button onClick={() => setIsDictating(false)} className="text-gray-400 hover:text-white text-xs">Cancel</button>
                             </div>
                         ) : (
-                            <textarea
-                                value={input}
-                                onChange={(e) => setInput(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }}}
-                                placeholder={isMobile ? "Message..." : "Message Nexus..."}
-                                className="w-full bg-transparent text-gray-100 placeholder-gray-500 px-4 py-2 focus:outline-none resize-none max-h-[150px] min-h-[40px] text-base"
-                                rows={1}
-                                style={{ height: input ? 'auto' : '40px' }}
-                                onInput={(e) => { e.currentTarget.style.height = 'auto'; e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px'; }}
-                            />
+                        <textarea
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }}}
+                            placeholder={isMobile ? "Message..." : "Message Nexus..."}
+                            className="w-full bg-transparent text-gray-100 placeholder-gray-500 px-4 py-2 focus:outline-none resize-none max-h-[150px] min-h-[40px] text-base"
+                            rows={1}
+                            style={{ height: input ? 'auto' : '40px' }}
+                            onInput={(e) => { e.currentTarget.style.height = 'auto'; e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px'; }}
+                        />
                         )}
 
-                        {attachments.length > 0 && !isDictating && (
+                        {attachments.length > 0 && (
                             <div className="px-4 pb-2 flex gap-2 overflow-x-auto">
                                 {attachments.map((att, i) => (
                                     <div key={i} className="bg-gray-800 text-xs rounded-md px-2 py-1 flex items-center gap-2 border border-gray-600">
@@ -1220,7 +924,7 @@ const Terminal = () => {
                         <div className="flex justify-between items-center px-2 pt-1 pb-1">
                             <div className="flex items-center space-x-1">
                                 <div className="relative mr-1 md:mr-2">
-                                    <button onClick={() => !useDeepResearch && setIsModelMenuOpen(!isModelMenuOpen)} className={`flex items-center gap-1 bg-[#1e1e1e] hover:bg-[#333] border border-gray-600 px-2 md:px-3 py-1.5 rounded-full cursor-pointer transition-colors ${useDeepResearch ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                    <button onClick={() => setIsModelMenuOpen(!isModelMenuOpen)} className={`flex items-center gap-1 bg-[#1e1e1e] hover:bg-[#333] border border-gray-600 px-2 md:px-3 py-1.5 rounded-full cursor-pointer transition-colors`}>
                                         <ChipIcon /> {!isMobile && <span className="text-xs font-medium text-gray-300 max-w-[100px] truncate">{TEXT_MODELS.find(m => m.id === modelId)?.name}</span>}
                                         <div className={`transition-transform duration-200 ${isModelMenuOpen ? 'rotate-180' : ''}`}><ChevronUpIcon /></div>
                                     </button>
@@ -1237,20 +941,17 @@ const Terminal = () => {
                                         </>
                                     )}
                                 </div>
-                                <input type="file" multiple ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+                                <input type="file" multiple ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="image/*"/>
                                 <button onClick={() => fileInputRef.current.click()} className="p-2 text-gray-400 hover:text-gray-100 hover:bg-gray-700 rounded-full transition-colors" title="Attach file"><PaperclipIcon /></button>
-                                <button onClick={() => setUseSearch(!useSearch)} className={`p-2 rounded-full transition-colors ${useSearch ? 'bg-blue-500/20 text-blue-400' : 'text-gray-400 hover:text-gray-100 hover:bg-gray-700'}`} title="Search Grounding"><SearchIcon active={useSearch} /></button>
-                                <button onClick={() => setUseThinking(!useThinking)} className={`p-2 rounded-full transition-colors ${useThinking ? 'bg-purple-500/20 text-purple-400' : 'text-gray-400 hover:text-gray-100 hover:bg-gray-700'}`} title="Stream Thinking" disabled={useDeepResearch}><BrainIcon active={useThinking && !useDeepResearch} /></button>
-                                <button onClick={() => { setUseDeepResearch(!useDeepResearch); if (!useDeepResearch) { setUseThinking(false); setUseSearch(true); } }} className={`p-2 rounded-full transition-colors ${useDeepResearch ? 'bg-teal-500/20 text-teal-400' : 'text-gray-400 hover:text-gray-100 hover:bg-gray-700'}`} title="Deep Research Mode"><LightbulbIcon active={useDeepResearch} /></button>
                             </div>
                             <div className="flex items-center space-x-2">
-                                 <button onClick={startDictation} className={`p-2 rounded-full transition-colors ${isDictating ? 'bg-red-500/20 text-red-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Voice Dictation"><MicIcon active={isDictating} /></button>
+                                <button onClick={startDictation} className={`p-2 rounded-full transition-colors ${isDictating ? 'bg-red-500/20 text-red-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Voice Dictation"><MicIcon active={isDictating} /></button>
                                 {isLoading ? (
                                     <button onClick={handleStop} className="p-2 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/40 transition-all" title="Stop Generation">
                                         <StopIcon />
                                     </button>
                                 ) : (
-                                    <button onClick={() => handleSend()} disabled={!input.trim() && attachments.length === 0 && !isDictating} className={`p-2 rounded-full transition-all duration-200 ${input.trim() || attachments.length > 0 ? 'bg-white text-black hover:bg-gray-200' : 'bg-[#3f3f3f] text-gray-500 cursor-not-allowed'}`}><SendIcon /></button>
+                                    <button onClick={() => handleSend()} disabled={!input.trim() && attachments.length === 0} className={`p-2 rounded-full transition-all duration-200 ${input.trim() || attachments.length > 0 ? 'bg-white text-black hover:bg-gray-200' : 'bg-[#3f3f3f] text-gray-500 cursor-not-allowed'}`}><SendIcon /></button>
                                 )}
                             </div>
                         </div>
